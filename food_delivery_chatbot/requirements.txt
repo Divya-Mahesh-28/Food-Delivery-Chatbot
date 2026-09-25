@@ -1,0 +1,12 @@
+streamlit>=1.37
+langchain==0.3.27
+langchain-core==0.3.75
+langchain-community==0.3.27
+langchain-groq==0.3.8
+langgraph==0.6.6
+rapidfuzz==3.13.0
+pydantic==2.12.5
+sqlalchemy>=2.0
+groq
+pandas
+numpy
