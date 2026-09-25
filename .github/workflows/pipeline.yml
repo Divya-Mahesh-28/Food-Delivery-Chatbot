@@ -33,7 +33,7 @@ jobs:
 
       - name: Initialize Database
         run: |
-          python food_delivery_chatbot/database.py
+          python food_delivery_chatbot/foodhub/database.py
 
       - name: Run Remaining Python Scripts
         env:
