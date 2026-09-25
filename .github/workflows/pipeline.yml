@@ -1,0 +1,52 @@
+name: Food Delivery Chatbot Pipeline
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  run-pipeline:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f food_delivery_chatbot/requirements.txt ]; then
+            pip install -r food_delivery_chatbot/requirements.txt
+          elif [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          fi
+
+      - name: Initialize Database
+        run: |
+          python food_delivery_chatbot/database.py
+
+      - name: Run Remaining Python Scripts
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+        run: |
+          for file in $(find . -maxdepth 2 -name "*.py" ! -name "database.py"); do
+            echo "Running $file..."
+            python "$file"
+          done
+
+      - name: Commit and Push Database Updates
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git add food_delivery_chatbot/data/customer_orders.db
+          git diff --quiet && git diff --staged --quiet || (git commit -m "Automated update of customer_orders.db" && git push)
