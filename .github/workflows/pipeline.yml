@@ -1,52 +1,104 @@
 name: Food Delivery Chatbot Pipeline
-
+ 
 on:
   push:
     branches:
-      - main
-  workflow_dispatch:
-
+      - main  # Automatically triggers on push to the main branch
+  workflow_dispatch:  # lets you click "Run workflow" in the Actions tab
+ 
 permissions:
-  contents: write
-
+  contents: read  # this pipeline only validates; nothing is committed back
+ 
 jobs:
-  run-pipeline:
+  validate:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout Repository
+      - name: Checkout repo
         uses: actions/checkout@v4
-
+        # Pulls everything already committed, including
+        # food_delivery_chatbot/data/customer_orders.db — no separate
+        # "register dataset" step is needed for a file that's already in git.
+ 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-
-      - name: Install Dependencies
+          cache: "pip"
+ 
+      - name: Install dependencies
+        run: pip install -r food_delivery_chatbot/requirements.txt
+ 
+      - name: Initialize / verify database
+        # Checks the .db file directly with sqlite3 — deliberately does NOT
+        # import anything from the foodhub package. Importing any submodule
+        # (e.g. `python -m food_delivery_chatbot.foodhub.database`) runs
+        # foodhub/__init__.py first, which does
+        # `from .orchestrator import chatagent, ...` — pulling in llm.py,
+        # which asserts GROQ_API_KEY is set. That's a real, reproduced
+        # failure: this step would fail on a missing API key, not tell you
+        # anything about the database. A raw sqlite3 check avoids that
+        # entirely and is a more accurate match for what "Initialize
+        # Database" should actually verify at this stage.
         run: |
-          python -m pip install --upgrade pip
-          if [ -f food_delivery_chatbot/requirements.txt ]; then
-            pip install -r food_delivery_chatbot/requirements.txt
-          elif [ -f requirements.txt ]; then
-            pip install -r requirements.txt
-          fi
-
-      - name: Initialize Database
+          python -c "
+          import sqlite3, os
+          path = 'food_delivery_chatbot/data/customer_orders.db'
+          if not os.path.exists(path):
+              raise SystemExit(f'::error::{path} is missing. Commit the .db file and push again.')
+          conn = sqlite3.connect(path)
+          tables = conn.execute(\"SELECT name FROM sqlite_master WHERE type='table'\").fetchall()
+          conn.close()
+          if not tables:
+              raise SystemExit('::error::Database has no tables.')
+          print('Database OK. Tables:', tables)
+          "
+ 
+      - name: Syntax-check every module
         run: |
-          python food_delivery_chatbot/foodhub/database.py
-
-      - name: Run Remaining Python Scripts
+          python -m py_compile food_delivery_chatbot/foodhub/*.py food_delivery_chatbot/streamlit.py
+          echo "All modules compiled cleanly."
+ 
+      - name: Smoke test (imports the package, checks the DB has tables)
         env:
+          # foodhub/config.py resolves DB_PATH relative to the repo root
+          # (e.g. "food_delivery_chatbot/data/customer_orders.db"), so this
+          # step keeps the working directory at the repo root and instead
+          # adds food_delivery_chatbot/ to PYTHONPATH so `import foodhub`
+          # resolves. Running from inside food_delivery_chatbot/ instead
+          # would break DB_PATH by looking for a nested
+          # food_delivery_chatbot/food_delivery_chatbot/... path.
+          PYTHONPATH: food_delivery_chatbot
+          # Dummy key so foodhub.llm's presence check passes — this step
+          # never calls the Groq API, it only verifies every module wires
+          # together (config -> database -> guardrails -> orchestrator)
+          # without errors.
+          GROQ_API_KEY: "sk-smoke-test-placeholder"
+        run: |
+          python -c "
+          from foodhub.database import TABLES
+          from foodhub import chatagent
+          assert 'orders' in TABLES, f'Expected an orders table, found: {TABLES}'
+          print('Package imports cleanly. Tables found:', TABLES)
+          "
+ 
+      - name: Check whether GROQ_API_KEY secret is configured
+        # GitHub Actions can't test secret existence directly inside an
+        # `if:` on another step, so this runs first and exposes the result
+        # as an env var the next step can gate on.
+        run: echo "GROQ_API_KEY_SET=${{ secrets.GROQ_API_KEY != '' }}" >> "$GITHUB_ENV"
+ 
+      - name: Live integration test
+        # Only runs if a real key is configured under Settings -> Secrets
+        # -> Actions -> GROQ_API_KEY. Safe to leave unset while you're
+        # still iterating — this step is skipped, not failed, without it.
+        if: ${{ env.GROQ_API_KEY_SET == 'true' }}
+        env:
+          PYTHONPATH: food_delivery_chatbot
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
         run: |
-          for file in $(find . -maxdepth 2 -name "*.py" ! -name "database.py"); do
-            echo "Running $file..."
-            python "$file"
-          done
-
-      - name: Commit and Push Database Updates
-        run: |
-          git config --local user.email "github-actions[bot]@users.noreply.github.com"
-          git config --local user.name "github-actions[bot]"
-          git add food_delivery_chatbot/data/customer_orders.db
-          git diff --quiet && git diff --staged --quiet || (git commit -m "Automated update of customer_orders.db" && git push)
+          python -c "
+          from foodhub import chatagent
+          reply = chatagent('ci-smoke-test', 'C1026', 'Where is my order O12501')
+          print('chatagent() reply:', reply)
+          assert reply, 'chatagent() returned an empty response'
+          "
