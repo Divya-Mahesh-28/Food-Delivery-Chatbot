@@ -1,14 +1,14 @@
 name: Food Delivery Chatbot Pipeline
- 
+
 on:
   push:
     branches:
       - main  # Automatically triggers on push to the main branch
   workflow_dispatch:  # lets you click "Run workflow" in the Actions tab
- 
+
 permissions:
   contents: read  # this pipeline only validates; nothing is committed back
- 
+
 jobs:
   validate:
     runs-on: ubuntu-latest
@@ -18,16 +18,16 @@ jobs:
         # Pulls everything already committed, including
         # food_delivery_chatbot/data/customer_orders.db — no separate
         # "register dataset" step is needed for a file that's already in git.
- 
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: "pip"
- 
+
       - name: Install dependencies
         run: pip install -r food_delivery_chatbot/requirements.txt
- 
+
       - name: Initialize / verify database
         # Checks the .db file directly with sqlite3 — deliberately does NOT
         # import anything from the foodhub package. Importing any submodule
@@ -52,12 +52,12 @@ jobs:
               raise SystemExit('::error::Database has no tables.')
           print('Database OK. Tables:', tables)
           "
- 
+
       - name: Syntax-check every module
         run: |
           python -m py_compile food_delivery_chatbot/foodhub/*.py food_delivery_chatbot/streamlit.py
           echo "All modules compiled cleanly."
- 
+
       - name: Smoke test (imports the package, checks the DB has tables)
         env:
           # foodhub/config.py resolves DB_PATH relative to the repo root
@@ -80,13 +80,13 @@ jobs:
           assert 'orders' in TABLES, f'Expected an orders table, found: {TABLES}'
           print('Package imports cleanly. Tables found:', TABLES)
           "
- 
+
       - name: Check whether GROQ_API_KEY secret is configured
         # GitHub Actions can't test secret existence directly inside an
         # `if:` on another step, so this runs first and exposes the result
         # as an env var the next step can gate on.
         run: echo "GROQ_API_KEY_SET=${{ secrets.GROQ_API_KEY != '' }}" >> "$GITHUB_ENV"
- 
+
       - name: Live integration test
         # Only runs if a real key is configured under Settings -> Secrets
         # -> Actions -> GROQ_API_KEY. Safe to leave unset while you're
