@@ -13,6 +13,7 @@ import uuid
 import streamlit as st
 
 from foodhub import chatagent  # input guard -> intent -> auth -> chat agent -> output guard
+from foodhub.orchestrator import auth_validator  # same instance chatagent() itself uses
 
 
 # ---------------------------------------------------------------------------
