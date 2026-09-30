@@ -18,18 +18,22 @@ from foodhub.orchestrator import auth_validator  # same instance chatagent() its
 
 st.set_page_config(page_title="FoodHub Support", page_icon="🍔", layout="centered")
 
+# Shown as quick-reply buttons above the chat input once logged in.
+# (label, message actually sent to chatagent() — kept separate so the
+# button can carry an emoji/short label while the model still gets a
+# clear, natural-language question.)
+RECOMMENDED_QUERIES = [
+    ("📦 Track my order", "Where is my order?"),
+    ("❌ Cancel my order", "I want to cancel my order"),
+    ("💳 Payment status", "What is the payment status of my order?"),
+    ("🗣️ Talk to a human", "I'd like to speak to a human agent"),
+]
+
 
 # ---------------------------------------------------------------------------
-# CHAT BUBBLE RENDERING
+# CHAT BUBBLE RENDERING — bot left, user right (custom HTML, since
+# st.chat_message() has no public alignment option).
 # ---------------------------------------------------------------------------
-# st.chat_message() has no public option for left/right alignment — its
-# internal CSS classes aren't a documented, stable API to target, and could
-# change between Streamlit versions without notice. Building each bubble as
-# plain HTML in a flex container keeps alignment under our own control.
-#
-# Content is html.escape()'d before being embedded (this app only ever
-# renders plain-text replies, never markdown), since unsafe_allow_html
-# passes the string through unescaped otherwise.
 def render_message(role: str, content: str) -> None:
     safe = html.escape(content).replace("\n", "<br>")
     if role == "user":
@@ -51,10 +55,30 @@ def render_message(role: str, content: str) -> None:
     )
 
 
+def handle_user_query(text: str) -> None:
+    """Single path for 'a message was submitted' — used by both the typed
+    chat_input and the recommended-query buttons, so the two can never
+    drift out of sync with each other."""
+    st.session_state.messages.append({"role": "user", "content": text})
+    render_message("user", text)
+
+    with st.spinner("Checking your order..."):
+        try:
+            reply = chatagent(
+                session_id=st.session_state.session_id,
+                authenticated_cust_id=st.session_state.cust_id,
+                user_message=text,
+            )
+        except Exception as e:
+            reply = "Sorry, something went wrong on our end. Please try again."
+            st.caption(f"[debug] {e}")  # remove before final submission
+
+    st.session_state.messages.append({"role": "assistant", "content": reply})
+    render_message("assistant", reply)
+
+
 # ---------------------------------------------------------------------------
-# SESSION STATE — initialized once, independent of login status, so login
-# and chat share one continuous page instead of the chat being hidden
-# behind a separate screen.
+# SESSION STATE
 # ---------------------------------------------------------------------------
 if "cust_id" not in st.session_state:
     st.session_state.cust_id = None
@@ -72,9 +96,7 @@ st.markdown("Your AI-powered assistant for all FoodHub order inquiries.")
 
 
 # ---------------------------------------------------------------------------
-# LOGIN — an inline widget, not a separate screen. Disappears once logged
-# in; the chat area below is always present on the same page, just
-# disabled until then.
+# LOGIN — inline, same page as the chat.
 # ---------------------------------------------------------------------------
 if st.session_state.cust_id is None:
     with st.container(border=True):
@@ -123,7 +145,7 @@ with st.sidebar:
             st.session_state.session_id = str(uuid.uuid4())
             st.session_state.messages = [
                 {"role": "assistant",
-                 "content": f"Hi! How can I help with your FoodHub order today?"}
+                 "content": "Hi! How can I help with your FoodHub order today?"}
             ]
             st.rerun()
 
@@ -137,15 +159,27 @@ with st.sidebar:
 
 
 # ---------------------------------------------------------------------------
-# CHAT HISTORY — bot messages left, user messages right
+# CHAT HISTORY
 # ---------------------------------------------------------------------------
 for msg in st.session_state.messages:
     render_message(msg["role"], msg["content"])
 
 
 # ---------------------------------------------------------------------------
-# CHAT INPUT — disabled (not hidden) until logged in, so the whole layout
-# stays visible on one page throughout.
+# RECOMMENDED QUERIES — quick-reply buttons above the input. Clicking one
+# runs the exact same handle_user_query() path as typing + pressing enter;
+# st.chat_input() itself can't be pre-filled or submitted from code, so
+# this is the only way to offer a "one tap" question.
+# ---------------------------------------------------------------------------
+if st.session_state.cust_id:
+    cols = st.columns(len(RECOMMENDED_QUERIES))
+    for i, (label, query_text) in enumerate(RECOMMENDED_QUERIES):
+        if cols[i].button(label, use_container_width=True, key=f"suggested_{i}"):
+            handle_user_query(query_text)
+
+
+# ---------------------------------------------------------------------------
+# CHAT INPUT
 # ---------------------------------------------------------------------------
 user_input = st.chat_input(
     "Type your message…" if st.session_state.cust_id else "Log in above to start chatting",
@@ -153,19 +187,4 @@ user_input = st.chat_input(
 )
 
 if user_input and st.session_state.cust_id:
-    st.session_state.messages.append({"role": "user", "content": user_input})
-    render_message("user", user_input)
-
-    with st.spinner("Checking your order..."):
-        try:
-            reply = chatagent(
-                session_id=st.session_state.session_id,
-                authenticated_cust_id=st.session_state.cust_id,
-                user_message=user_input,
-            )
-        except Exception as e:
-            reply = "Sorry, something went wrong on our end. Please try again."
-            st.caption(f"[debug] {e}")  # remove before final submission
-
-    st.session_state.messages.append({"role": "assistant", "content": reply})
-    render_message("assistant", reply)
+    handle_user_query(user_input)
