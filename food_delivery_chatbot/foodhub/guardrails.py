@@ -1,4 +1,5 @@
 
+
 """Input guardrail (jailbreak/prompt-injection detection, PII redaction) and
 output guardrail (SQL-leak scrubbing, tone/format polishing)."""
 
@@ -95,6 +96,9 @@ class AdvancedPromptGuardrail(PiiRedactor):
             match = process.extractOne(word, self.high_risk_keywords, scorer=fuzz.ratio)
             if match:
                 matched_kw, score, _ = match
+                # Plain inflections (ignored, deleted, systems) are ordinary words, not obfuscation.
+                if word.startswith(matched_kw) or matched_kw.startswith(word):
+                    continue
                 if score >= 82 and word != matched_kw:
                     return {"trigger": "OBFUSCATED_INJECTION", "score": 0.85,
                              "reason": f"Obfuscated variant of high-risk keyword: '{word}' -> '{matched_kw}'"}
@@ -146,8 +150,12 @@ class AdvancedPromptGuardrail(PiiRedactor):
 
 
 class OutputGuardrail(PiiRedactor):
+    # Only genuine leak signals. Bare 'from' / 'where' are normal English ("picked up from the
+    # restaurant") and must not turn a good reply into the fallback message.
     sql_leak_pattern = re.compile(
-        r"\b(select|from|where|cust_id|order_id\s*=|sqlite|drop\s+table)\b", re.IGNORECASE
+        r"\bselect\b.+\bfrom\b|\bsqlite\b|\bcust_id\b|\border_id\s*=|\bdrop\s+table\b"
+        r"|\borders\s+table\b|\bsql\b",
+        re.IGNORECASE | re.DOTALL,
     )
 
     def evaluate(self, text: str) -> GuardrailVerdict:
@@ -170,13 +178,20 @@ class OutputValidationResult(BaseModel):
 
 FALLBACK_RESPONSE = (
     "I apologize, but I am unable to retrieve your order details right now. "
-    "Our support team has been notified, or you may try again shortly."
+    "Please try again shortly, or ask to speak with a human agent."
+)
+
+# Raw lookups that are really failures (tracebacks, blocked queries, DB errors). Deliberately NOT a bare
+# "error" substring: harmless data text such as "data-entry error" must not trigger the fallback.
+FAILURE_PATTERN = re.compile(
+    r"traceback|exception|query blocked by guardrail|\berror:|^\s*error\b|sqlite3\."
+    r"|operationalerror|\b(?:sql|sqlite|database|operational|syntax)\s+error\b",
+    re.IGNORECASE | re.MULTILINE,
 )
 
 
 def process_integrated_output_guardrail(raw_llm_output: str, user_context: str, llm) -> str:
-    failure_markers = ("error", "exception", "traceback", "query blocked by guardrail")
-    if not raw_llm_output or any(m in raw_llm_output.lower() for m in failure_markers):
+    if not raw_llm_output or FAILURE_PATTERN.search(raw_llm_output):
         return FALLBACK_RESPONSE
 
     output_guard = OutputGuardrail()
