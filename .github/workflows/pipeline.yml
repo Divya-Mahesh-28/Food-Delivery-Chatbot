@@ -55,7 +55,7 @@ jobs:
 
       - name: Syntax-check every module
         run: |
-          python -m py_compile food_delivery_chatbot/foodhub/*.py food_delivery_chatbot/streamlit.py
+          python -m py_compile food_delivery_chatbot/foodhub/*.py food_delivery_chatbot/streamlit_app.py
           echo "All modules compiled cleanly."
 
       - name: Smoke test (imports the package, checks the DB has tables)
