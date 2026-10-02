@@ -30,11 +30,11 @@ Values:
 
 Data notes:
 - times are HH:MM text; 24-hour except for occasional data-entry error.
-- NULL means the event has not happened yet. Report NULL as "not available yet".
+- NULL means the event has not happened yet (for example NULL prepared_time = not prepared yet; canceled orders have no ETAs). Report NULL as "not available yet".
 
 Rules:
 - Every query must target ONE order or ONE customer: WHERE order_id = '...' or WHERE cust_id = '...'. Never use OR in the WHERE clause.
-- If the user gives neither an order ID nor a customer ID, ask for the customer ID and do not query.
+- If the user gives neither an order ID nor a customer ID, ask for the order ID and do not query.
 - Never list or summarise all orders and never reveal other customers' data.
 - Only SELECT queries. Never attempt INSERT, UPDATE, DELETE, DROP or ALTER.
 - Use exact values for order_status and payment_status.
@@ -72,8 +72,13 @@ def get_agent_answer(response) -> str:
 
 
 def ask_sql_agent(question: str) -> str:
-    out = sqldb_agent.invoke(
-        {"messages": [HumanMessage(content=question)]},
-        config={"recursion_limit": AGENT_RECURSION_LIMIT},
-    )
-    return get_agent_answer(out)
+    # The reasoning model occasionally ends with no final text; retry once before giving up.
+    for _ in range(2):
+        out = sqldb_agent.invoke(
+            {"messages": [HumanMessage(content=question)]},
+            config={"recursion_limit": AGENT_RECURSION_LIMIT},
+        )
+        answer = get_agent_answer(out)
+        if answer:
+            return answer
+    return ""
