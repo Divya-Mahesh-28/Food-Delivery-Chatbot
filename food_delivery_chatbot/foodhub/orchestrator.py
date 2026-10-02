@@ -17,7 +17,7 @@ from .intent import IntentCategory, classify_user_intent
 from .llm import llm
 from .memory import ProductionSessionMemoryManager
 from .sql_agent import build_agent, get_agent_answer
-from .tools import CHAT_AGENT_PROMPT, answer_tool, make_order_query_tool
+from .tools import CHAT_AGENT_PROMPT, answer_tool, make_order_query_tool, process_cancellation
 
 memory_manager = ProductionSessionMemoryManager()
 input_guardrail = AdvancedPromptGuardrail(risk_threshold=PROMPT_RISK_THRESHOLD)
@@ -47,17 +47,22 @@ def chatagent(session_id: str, authenticated_cust_id: str, user_message: str) ->
     if intent_result.intent == IntentCategory.OFF_TOPIC:
         reply = ("I can help with FoodHub order questions — tracking, cancellation, "
                   "or payment status. How can I help with your order?")
-        return _save_and_return(session_id, user_message, reply)
+        return _save_and_return(session_id, msg, reply)
 
     if intent_result.intent == IntentCategory.HUMAN_ESCALATION:
-        reply = ("I'm really sorry for the trouble. I'm escalating this to a human "
-                  "agent who will follow up shortly.")
-        return _save_and_return(session_id, user_message, reply)
+        reply = ("I'm sorry for the trouble you've had. A human agent will be informed "
+                  "and will get in touch with you shortly.")
+        return _save_and_return(session_id, msg, reply)
 
     # 5. Auth validation
     auth_result = auth_validator.validate_user_ownership(authenticated_cust_id, intent_result.target_order_id)
     if not auth_result["authorized"]:
-        return _save_and_return(session_id, user_message, auth_result["message"])
+        return _save_and_return(session_id, msg, auth_result["message"])
+
+    # 5b. Cancellation: status check and reply are decided in code, not by the LLM
+    if intent_result.intent == IntentCategory.ORDER_CANCELLATION:
+        reply = process_cancellation(authenticated_cust_id, intent_result.target_order_id)
+        return _save_and_return(session_id, msg, reply)
 
     # 6. Chat Agent, tools bound to verified identity for this request
     bound_order_tool = make_order_query_tool(authenticated_cust_id, intent_result.target_order_id)
@@ -68,6 +73,8 @@ def chatagent(session_id: str, authenticated_cust_id: str, user_message: str) ->
         config={"recursion_limit": AGENT_RECURSION_LIMIT},
     )
     reply = get_agent_answer(agent_result)
+    if not reply.strip():                      # reasoning model sometimes ends with no text
+        reply = FALLBACK_RESPONSE
 
     # 7. Output guardrail safety net (catches replies that skipped answer_tool)
     final_guard = OutputGuardrail()
@@ -76,7 +83,7 @@ def chatagent(session_id: str, authenticated_cust_id: str, user_message: str) ->
         scrubbed = FALLBACK_RESPONSE
 
     # 8. Memory save
-    return _save_and_return(session_id, user_message, scrubbed)
+    return _save_and_return(session_id, msg, scrubbed)
 
 
 def run_chat_batch(session_id: str, authenticated_cust_id: str, messages: List[str]) -> List[dict]:
