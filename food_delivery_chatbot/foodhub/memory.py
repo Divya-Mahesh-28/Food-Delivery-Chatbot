@@ -1,9 +1,10 @@
 
+
 """Per-session chat history.
 
 In-process, single-worker store: resets on restart and won't scale across
 multiple processes. Fine for a demo; would need Redis (or similar) in
-production — noted in README under Known limitations.
+production — noted under Limitations in the report.
 """
 
 from collections import OrderedDict
