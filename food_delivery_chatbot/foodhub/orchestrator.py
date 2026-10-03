@@ -2,10 +2,12 @@
 """chatagent() — the single entry point the UI calls.
 
 Pipeline: input guardrail -> memory fetch -> intent classification ->
-route OFF_TOPIC/HUMAN_ESCALATION directly -> auth validation ->
-Chat Agent (order_query_tool -> answer_tool, enforced in code) -> output guardrail -> memory save.
+route OFF_TOPIC/HUMAN_ESCALATION directly -> order-ID resolution (regex backstop) ->
+auth validation -> Chat Agent (order_query_tool -> answer_tool, enforced in code) ->
+output guardrail -> memory save.
 """
 
+import re
 from typing import List
 
 from langchain_core.messages import HumanMessage
@@ -22,6 +24,20 @@ from .tools import CHAT_AGENT_PROMPT, answer_tool, make_order_query_tool, proces
 memory_manager = ProductionSessionMemoryManager()
 input_guardrail = AdvancedPromptGuardrail(risk_threshold=PROMPT_RISK_THRESHOLD)
 auth_validator = AuthValidator(db_path=DB_PATH)
+
+# Order IDs in this dataset look like O12486 (letter O + 5 digits).
+ORDER_ID_PATTERN = re.compile(r"\bO\d{5}\b", re.IGNORECASE)
+_NO_ID_VALUES = {"", "NONE", "NULL", "N/A", "NA"}
+
+
+def extract_order_ids(text: str) -> List[str]:
+    """Distinct order IDs written in the message, upper-cased, in order of appearance."""
+    found: List[str] = []
+    for match in ORDER_ID_PATTERN.findall(text or ""):
+        oid = match.upper()
+        if oid not in found:
+            found.append(oid)
+    return found
 
 
 def _save_and_return(session_id: str, user_message: str, reply: str) -> str:
@@ -64,18 +80,35 @@ def chatagent(session_id: str, authenticated_cust_id: str, user_message: str) ->
                   "and will get in touch with you shortly.")
         return _save_and_return(session_id, msg, reply)
 
+    # 4b. Resolve the target order ID. An ID the customer actually typed always wins over
+    #     the classifier's guess, so a missed or wrong extraction can never silently turn
+    #     "Where is O12488?" into a lookup of the customer's latest order.
+    ids_in_msg = extract_order_ids(msg)
+    if len(ids_in_msg) > 1:
+        reply = ("I can only look at one order at a time. "
+                 "Could you tell me which order ID you would like help with?")
+        return _save_and_return(session_id, msg, reply)
+
+    classifier_id = (intent_result.target_order_id or "").strip().upper()
+    if classifier_id in _NO_ID_VALUES:
+        classifier_id = ""
+    # Message ID first; classifier ID only when the message has none (e.g. "cancel it"
+    # after discussing O12501). A malformed classifier ID is kept so that auth rejects it
+    # instead of quietly falling back to the latest order.
+    target_order_id = ids_in_msg[0] if ids_in_msg else (classifier_id or None)
+
     # 5. Auth validation
-    auth_result = auth_validator.validate_user_ownership(authenticated_cust_id, intent_result.target_order_id)
+    auth_result = auth_validator.validate_user_ownership(authenticated_cust_id, target_order_id)
     if not auth_result["authorized"]:
         return _save_and_return(session_id, msg, auth_result["message"])
 
     # 5b. Cancellation: status check and reply are decided in code, not by the LLM
     if intent_result.intent == IntentCategory.ORDER_CANCELLATION:
-        reply = process_cancellation(authenticated_cust_id, intent_result.target_order_id)
+        reply = process_cancellation(authenticated_cust_id, target_order_id)
         return _save_and_return(session_id, msg, reply)
 
     # 6. Chat Agent, tools bound to verified identity for this request
-    bound_order_tool = make_order_query_tool(authenticated_cust_id, intent_result.target_order_id)
+    bound_order_tool = make_order_query_tool(authenticated_cust_id, target_order_id)
     session_chat_agent = build_agent(llm, [bound_order_tool, answer_tool], CHAT_AGENT_PROMPT)
 
     agent_result = session_chat_agent.invoke(
