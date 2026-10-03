@@ -97,31 +97,37 @@ st.markdown("Your AI-powered assistant for all FoodHub order inquiries.")
 
 
 # ---------------------------------------------------------------------------
-# LOGIN — inline, same page as the chat.
+# LOGIN — inline, same page as the chat. Wrapped in st.form so the typed value
+# is submitted together with the button click (or the Enter key). A bare
+# st.text_input only commits on Enter/blur, which left a disabled button stuck.
 # ---------------------------------------------------------------------------
 if st.session_state.cust_id is None:
-    with st.container(border=True):
+    with st.form("login_form"):
         col1, col2 = st.columns([3, 1])
         with col1:
             entered_id = st.text_input(
                 "Customer ID", value="", placeholder="e.g. C1026",
                 label_visibility="collapsed",
-            ).strip().upper()
+            )
         with col2:
-            login_clicked = st.button("Log in", use_container_width=True, disabled=not entered_id)
+            login_clicked = st.form_submit_button("Log in", use_container_width=True)
 
     if login_clicked:
-        result = auth_validator.validate_customer(entered_id)
-        if result["authorized"]:
-            st.session_state.cust_id = entered_id
-            st.session_state.messages.append(
-                {"role": "assistant",
-                 "content": f"Thanks! I can see your FoodHub account ({entered_id}). "
-                            f"How can I help with your order today?"}
-            )
-            st.rerun()
+        entered_id = entered_id.strip().upper()
+        if not entered_id:
+            st.error("Please enter your Customer ID.")
         else:
-            st.error(result["message"])
+            result = auth_validator.validate_customer(entered_id)
+            if result["authorized"]:
+                st.session_state.cust_id = entered_id
+                st.session_state.messages.append(
+                    {"role": "assistant",
+                     "content": f"Thanks! I can see your FoodHub account ({entered_id}). "
+                                f"How can I help with your order today?"}
+                )
+                st.rerun()
+            else:
+                st.error(result["message"])
 else:
     st.success(f"Logged in as {st.session_state.cust_id}")
 
