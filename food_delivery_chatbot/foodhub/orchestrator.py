@@ -103,3 +103,13 @@ def chatagent(session_id: str, authenticated_cust_id: str, user_message: str) ->
 
     # 8. Memory save
     return _save_and_return(session_id, msg, scrubbed)
+
+def run_chat_batch(session_id: str, authenticated_cust_id: str, messages: List[str]) -> List[dict]:
+    """Reproducible, non-interactive runner — use for report screenshots
+    instead of live-typing."""
+    results = []
+    for msg in messages:
+        reply = chatagent(session_id, authenticated_cust_id, msg)
+        results.append({"user": msg, "assistant": reply})
+        print(f"You: {msg}\nFoodHub Assistant: {reply}\n{'-' * 60}")
+    return results
