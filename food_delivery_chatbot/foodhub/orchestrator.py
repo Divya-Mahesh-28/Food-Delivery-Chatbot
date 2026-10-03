@@ -3,7 +3,7 @@
 
 Pipeline: input guardrail -> memory fetch -> intent classification ->
 route OFF_TOPIC/HUMAN_ESCALATION directly -> auth validation ->
-Chat Agent (order_query_tool -> answer_tool) -> output guardrail -> memory save.
+Chat Agent (order_query_tool -> answer_tool, enforced in code) -> output guardrail -> memory save.
 """
 
 from typing import List
@@ -16,7 +16,7 @@ from .guardrails import AdvancedPromptGuardrail, OutputGuardrail, FALLBACK_RESPO
 from .intent import IntentCategory, classify_user_intent
 from .llm import llm
 from .memory import ProductionSessionMemoryManager
-from .sql_agent import build_agent, get_agent_answer
+from .sql_agent import build_agent
 from .tools import CHAT_AGENT_PROMPT, answer_tool, make_order_query_tool, process_cancellation
 
 memory_manager = ProductionSessionMemoryManager()
@@ -30,11 +30,21 @@ def _save_and_return(session_id: str, user_message: str, reply: str) -> str:
     return reply
 
 
+def _tool_results(agent_result, tool_name: str):
+    """(arguments, output) for every call the Chat Agent made to `tool_name`."""
+    msgs = agent_result["messages"]
+    args_by_id = {tc["id"]: tc["args"]
+                  for m in msgs for tc in (getattr(m, "tool_calls", None) or [])
+                  if tc["name"] == tool_name}
+    return [(args_by_id.get(m.tool_call_id, {}), str(m.content))
+            for m in msgs if getattr(m, "type", "") == "tool" and m.name == tool_name]
+
+
 def chatagent(session_id: str, authenticated_cust_id: str, user_message: str) -> str:
     # 1. Input guardrail
     verdict = input_guardrail.evaluate(user_message)
     if not verdict.is_safe and verdict.trigger_type != "PII_DETECTION":
-        return "I'm sorry, I can only help with your own order. Could you share your order ID?"
+        return "I'm sorry, I can only help with your own order. Could you share your customer ID?"
     msg = verdict.sanitized_input
 
     # 2. Memory fetch
@@ -72,7 +82,16 @@ def chatagent(session_id: str, authenticated_cust_id: str, user_message: str) ->
         {"messages": [HumanMessage(content=msg)]},
         config={"recursion_limit": AGENT_RECURSION_LIMIT},
     )
-    reply = get_agent_answer(agent_result)
+
+    # 6b. Enforce the tool workflow instead of trusting the model to follow the prompt:
+    #     the facts must come from order_query_tool, and the reply from answer_tool run on
+    #     exactly that output. Anything the model skipped or altered is redone here in code.
+    order_runs = _tool_results(agent_result, "order_query_tool")
+    raw_response = order_runs[-1][1] if order_runs else bound_order_tool.invoke({"customer_query": msg})
+    reply = next((out for args, out in reversed(_tool_results(agent_result, "answer_tool"))
+                  if str(args.get("raw_response", "")).strip() == raw_response.strip()), None)
+    if reply is None:
+        reply = answer_tool.invoke({"raw_response": raw_response, "user_context": msg})
     if not reply.strip():                      # reasoning model sometimes ends with no text
         reply = FALLBACK_RESPONSE
 
@@ -84,14 +103,3 @@ def chatagent(session_id: str, authenticated_cust_id: str, user_message: str) ->
 
     # 8. Memory save
     return _save_and_return(session_id, msg, scrubbed)
-
-
-def run_chat_batch(session_id: str, authenticated_cust_id: str, messages: List[str]) -> List[dict]:
-    """Reproducible, non-interactive runner — use for report screenshots
-    instead of live-typing."""
-    results = []
-    for msg in messages:
-        reply = chatagent(session_id, authenticated_cust_id, msg)
-        results.append({"user": msg, "assistant": reply})
-        print(f"You: {msg}\nFoodHub Assistant: {reply}\n{'-' * 60}")
-    return results
