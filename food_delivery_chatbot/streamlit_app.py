@@ -16,6 +16,7 @@ import streamlit as st
 
 from foodhub import chatagent  # input guard -> intent -> auth -> chat agent -> output guard
 from foodhub.orchestrator import auth_validator  # same instance chatagent() itself uses
+from foodhub.config import EXIT_COMMANDS, GOODBYE_MESSAGE
 
 st.set_page_config(page_title="FoodHub Support", page_icon="🍔", layout="centered")
 
@@ -57,11 +58,15 @@ def render_message(role: str, content: str) -> None:
 
 
 def handle_user_query(text: str) -> None:
-    """Single path for 'a message was submitted' — used by both the typed
-    chat_input and the recommended-query buttons, so the two can never
-    drift out of sync with each other."""
     st.session_state.messages.append({"role": "user", "content": text})
     render_message("user", text)
+
+    # Handle exit commands (same as the notebook loop): no LLM call, end the session
+    if text.strip().lower() in EXIT_COMMANDS:
+        st.session_state.messages.append({"role": "assistant", "content": GOODBYE_MESSAGE})
+        st.session_state.cust_id = None                       # log out
+        st.session_state.session_id = str(uuid.uuid4())       # fresh memory next time
+        st.rerun()                                            # shows goodbye, then login box
 
     with st.spinner("Checking your order..."):
         try:
