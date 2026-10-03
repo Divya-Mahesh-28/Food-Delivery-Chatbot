@@ -25,3 +25,6 @@ MAX_ACTIVE_SESSIONS      = 100
 
 # --- Guardrails -----------------------------------------------------------
 PROMPT_RISK_THRESHOLD = 0.5
+
+EXIT_COMMANDS   = {"exit", "quit", "bye"}
+GOODBYE_MESSAGE = "Thanks for reaching out. Have a great day!"
