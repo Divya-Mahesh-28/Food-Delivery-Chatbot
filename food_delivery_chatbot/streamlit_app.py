@@ -175,6 +175,16 @@ with st.sidebar:
 for msg in st.session_state.messages:
     render_message(msg["role"], msg["content"])
 
+# ---------------------------------------------------------------------------
+# ORDER CANCELLATION
+# ---------------------------------------------------------------------------
+if st.session_state.cust_id and memory_manager.get_pending_cancellation(st.session_state.session_id):
+    st.info("Please confirm: do you want to cancel this order?")
+    y, n = st.columns(2)
+    if y.button("✅ Yes, cancel it", key="confirm_yes", use_container_width=True):
+        handle_user_query("yes"); st.rerun()
+    if n.button("❌ No, keep it", key="confirm_no", use_container_width=True):
+        handle_user_query("no"); st.rerun()
 
 # ---------------------------------------------------------------------------
 # RECOMMENDED QUERIES — quick-reply buttons above the input. Clicking one
