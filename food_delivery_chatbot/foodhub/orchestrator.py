@@ -62,6 +62,18 @@ def chatagent(session_id: str, authenticated_cust_id: str, user_message: str) ->
     if not verdict.is_safe and verdict.trigger_type != "PII_DETECTION":
         return "I'm sorry, I can only help with your own order. Could you share your order ID?"
     msg = verdict.sanitized_input
+    
+    # 1b. A cancellation is waiting for the customer's YES/NO. Handled in code, never by the LLM.
+    pending_order = memory_manager.get_pending_cancellation(session_id)
+    if pending_order:
+        decision = parse_confirmation(msg)
+        memory_manager.clear_pending_cancellation(session_id)        # one-shot: a later "yes" cannot revive it
+        if decision is True:
+            return _save_and_return(session_id, msg, confirm_cancellation(authenticated_cust_id, pending_order))
+        if decision is False:
+            return _save_and_return(session_id, msg,
+                f"Understood. Your order {pending_order} has not been cancelled and remains active.")
+      
 
     # 2. Memory fetch
     chat_history_str = memory_manager.format_history_for_context(session_id, max_turns=3)
@@ -104,7 +116,9 @@ def chatagent(session_id: str, authenticated_cust_id: str, user_message: str) ->
 
     # 5b. Cancellation: status check and reply are decided in code, not by the LLM
     if intent_result.intent == IntentCategory.ORDER_CANCELLATION:
-        reply = process_cancellation(authenticated_cust_id, target_order_id)
+        reply, order_to_confirm = request_cancellation(authenticated_cust_id, target_order_id)
+        if order_to_confirm:
+            memory_manager.set_pending_cancellation(session_id, order_to_confirm)
         return _save_and_return(session_id, msg, reply)
 
     # 6. Chat Agent, tools bound to verified identity for this request
