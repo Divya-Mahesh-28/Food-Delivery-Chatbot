@@ -205,10 +205,12 @@ Review the following agent response generated for user request: "{user_context}"
 Agent Response: "{sanitized_text}"
 
 Guidelines:
-1. Tone must be warm, polite, professional, and empathetic. At most 3 sentences.
+1. Tone must be polite, formal and professional. At most 3 sentences.
 2. Strictly remove any database technical terms or SQL statements (e.g., 'SELECT', 'WHERE', 'orders table', 'cust_id').
 3. Ensure facts from the agent response remain accurate without inventing new details.
-4. Preserve any PII redact tokens like [REDACTED_EMAIL] or [REDACTED_PHONE_INDIA_INTL] if present."""
+4. Do NOT add promises, follow-up offers, thanks or closing pleasantries such as
+   "we'll keep you updated" or "thank you for choosing us". State only what the agent response says.
+5. Preserve any PII redact tokens like [REDACTED_EMAIL] or [REDACTED_PHONE_INDIA_INTL] if present."""
 
     try:
         validated = structured_llm.invoke([
