@@ -15,7 +15,7 @@ import uuid
 import streamlit as st
 
 from foodhub import chatagent  # input guard -> intent -> auth -> chat agent -> output guard
-from foodhub.orchestrator import auth_validator  # same instance chatagent() itself uses
+from foodhub.orchestrator import auth_validator, memory_manager  # same instances chatagent() itself uses
 from foodhub.config import EXIT_COMMANDS, GOODBYE_MESSAGE
 
 st.set_page_config(page_title="FoodHub Support", page_icon="🍔", layout="centered")
@@ -80,7 +80,9 @@ def handle_user_query(text: str) -> None:
             logging.getLogger(__name__).exception("chatagent failed: %s", e)  # server log only, not shown to the customer
 
     st.session_state.messages.append({"role": "assistant", "content": reply})
-    render_message("assistant", reply)
+    # Redraw the whole page so the history shows the reply AND the Yes/No
+    # buttons appear straight away when a cancellation is waiting for confirmation.
+    st.rerun()
 
 
 # ---------------------------------------------------------------------------
@@ -165,7 +167,8 @@ with st.sidebar:
     st.divider()
     st.caption(
         "Try: 'Where is my order?', "
-        "'What's the status of my order?'"
+        "'What's the status of my order?', "
+        "'I want to cancel my order'"
     )
 
 
@@ -175,16 +178,22 @@ with st.sidebar:
 for msg in st.session_state.messages:
     render_message(msg["role"], msg["content"])
 
+
 # ---------------------------------------------------------------------------
-# ORDER CANCELLATION
+# ORDER CANCELLATION — step 2 of the two-step flow. Shown only while the
+# backend is holding a pending cancellation for this session (set by
+# request_cancellation, cleared by the next message). Clicking a button sends
+# the same "yes"/"no" the customer could type, so the decision still goes
+# through confirm_cancellation() in code, never the LLM.
 # ---------------------------------------------------------------------------
 if st.session_state.cust_id and memory_manager.get_pending_cancellation(st.session_state.session_id):
     st.info("Please confirm: do you want to cancel this order?")
-    y, n = st.columns(2)
-    if y.button("✅ Yes, cancel it", key="confirm_yes", use_container_width=True):
-        handle_user_query("yes"); st.rerun()
-    if n.button("❌ No, keep it", key="confirm_no", use_container_width=True):
-        handle_user_query("no"); st.rerun()
+    yes_col, no_col = st.columns(2)
+    if yes_col.button("✅ Yes, cancel it", key="confirm_yes", use_container_width=True):
+        handle_user_query("yes")
+    if no_col.button("❌ No, keep it", key="confirm_no", use_container_width=True):
+        handle_user_query("no")
+
 
 # ---------------------------------------------------------------------------
 # RECOMMENDED QUERIES — quick-reply buttons above the input. Clicking one
