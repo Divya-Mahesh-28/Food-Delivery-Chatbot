@@ -19,7 +19,8 @@ from .intent import IntentCategory, classify_user_intent
 from .llm import llm
 from .memory import ProductionSessionMemoryManager
 from .sql_agent import build_agent
-from .tools import CHAT_AGENT_PROMPT, answer_tool, make_order_query_tool, process_cancellation
+from .tools import (CHAT_AGENT_PROMPT, answer_tool, make_order_query_tool,
+                    request_cancellation, confirm_cancellation, parse_confirmation)
 
 memory_manager = ProductionSessionMemoryManager()
 input_guardrail = AdvancedPromptGuardrail(risk_threshold=PROMPT_RISK_THRESHOLD)
