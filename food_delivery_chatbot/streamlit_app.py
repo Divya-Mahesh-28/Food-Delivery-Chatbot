@@ -164,9 +164,8 @@ with st.sidebar:
     st.caption(f"session_id: `{st.session_state.session_id[:8]}…`")
     st.divider()
     st.caption(
-        "Try: 'Where is my order' (your most recent order), "
-        "'What's the status of O12488' (someone else's — should be blocked), "
-        "or 'I want to cancel my order'."
+        "Try: 'Where is my order?', "
+        "'What's the status of my order?'"
     )
 
 
