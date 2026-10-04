@@ -60,7 +60,7 @@ def chatagent(session_id: str, authenticated_cust_id: str, user_message: str) ->
     # 1. Input guardrail
     verdict = input_guardrail.evaluate(user_message)
     if not verdict.is_safe and verdict.trigger_type != "PII_DETECTION":
-        return "I'm sorry, I can only help with your own order. Could you share your customer ID?"
+        return "I'm sorry, I can only help with your own order. Could you share your order ID?"
     msg = verdict.sanitized_input
 
     # 2. Memory fetch
