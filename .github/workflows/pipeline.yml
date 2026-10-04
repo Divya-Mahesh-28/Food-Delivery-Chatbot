@@ -95,3 +95,4 @@ jobs:
           assert "incorrect customer or order details" in reply.lower(), f"unexpected reply: {reply!r}"
           assert not re.search(r"deliver|completed|C1013", reply, re.I), "reply leaked another customer's data"
           EOF
+      
