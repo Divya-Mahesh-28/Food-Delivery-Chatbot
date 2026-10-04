@@ -68,6 +68,7 @@ Use ONLY the order context provided; state nothing beyond it. Answer exactly wha
 (status, ETA, payment, items). Report null / None values as "not available yet". If a value is
 marked "(approximate ...)", keep it marked as approximate. If the context says no order was found,
 say that no matching order was found. Never mention SQL, tables, columns or customer IDs.
+Never promise or imply any future action (no "we will update you", "we will notify you").
 Plain facts only, at most 4 short sentences; politeness and tone are handled in a later step."""
 
 
@@ -109,23 +110,30 @@ def make_order_query_tool(authenticated_cust_id: str, authorized_order_id: Optio
 
 
 CANCELLABLE_STATUSES = { "preparing food"}   # not yet picked up by the delivery partner
+_YES_WORDS   = {"yes", "y", "yeah", "yep", "yup", "sure", "ok", "okay", "confirm", "confirmed", "proceed"}
+_YES_PHRASES = ("go ahead", "please do", "do it")
+_NO_WORDS    = {"no", "n", "nope", "nah", "stop", "keep", "dont", "don't", "never", "wait"}
+_NO_PHRASES  = ("do not", "never mind", "nevermind", "not now", "changed my mind")
 
 
-def process_cancellation(authenticated_cust_id: str, authorized_order_id: Optional[str]) -> str:
-    """Checks the order status and, if cancellation is still possible, returns the
-    cancellation confirmation. Decided in code (no LLM), so the customer is never told
-    an order is cancelled when its status does not allow it. Like the rest of the app
-    it is read-only: it confirms the cancellation to the customer but writes nothing
-    to the database. Uses the order the customer named, else their most recent order."""
-    row = fetch_order_row(order_id=authorized_order_id, cust_id=authenticated_cust_id)
-    if row is None:
-        return "I'm sorry, I couldn't find an order on your account to cancel."
-    order_id = row["order_id"]
-    status = (row.get("order_status") or "").strip().lower()
+def parse_confirmation(text: str) -> Optional[bool]:
+    """True = clear YES, False = clear NO, None = anything else.
+    Ambiguity always resolves to 'do not cancel' (see the orchestrator)."""
+    t = re.sub(r"[^\w\s']", " ", (text or "").lower())
+    tokens = set(t.split())
+    yes = bool(tokens & _YES_WORDS) or any(p in t for p in _YES_PHRASES)
+    no = bool(tokens & _NO_WORDS) or any(p in t for p in _NO_PHRASES)
+    if yes == no:          # neither, or both ("yes but don't")
+        return None
+    return yes
+
+
+def _cancellation_block_reason(order_id: str, status: str) -> Optional[str]:
+    """None if the order can still be cancelled, else the customer-facing reason it cannot."""
     if status == "canceled":
         return f"Your order {order_id} has already been cancelled."
     if status in CANCELLABLE_STATUSES:
-        return f"Your order {order_id} has been cancelled."
+        return None
     if status == "picked up":
         return (f"I'm sorry, order {order_id} has already been picked up for delivery, "
                 "so it can no longer be cancelled.")
@@ -133,6 +141,33 @@ def process_cancellation(authenticated_cust_id: str, authorized_order_id: Option
         return f"I'm sorry, order {order_id} has already been delivered, so it can't be cancelled."
     return f"I'm sorry, order {order_id} can't be cancelled in its current status."
 
+
+def request_cancellation(authenticated_cust_id: str, authorized_order_id: Optional[str]):
+    """STEP 1. Check eligibility in code and ask the customer to confirm.
+    Returns (reply, order_id_awaiting_confirmation or None). Nothing is 'cancelled' yet."""
+    row = fetch_order_row(order_id=authorized_order_id, cust_id=authenticated_cust_id)
+    if row is None:
+        return "I'm sorry, I couldn't find an order on your account to cancel.", None
+    order_id = row["order_id"]
+    status = (row.get("order_status") or "").strip().lower()
+    reason = _cancellation_block_reason(order_id, status)
+    if reason:
+        return reason, None
+    return (f"Your order {order_id} ({row['item_in_order']}) is still being prepared and can be "
+            "cancelled. Please reply YES to confirm the cancellation, or NO to keep your order."), order_id
+
+
+def confirm_cancellation(authenticated_cust_id: str, order_id: str) -> str:
+    """STEP 2 (only after an explicit YES). Re-checks ownership and status, because the order
+    may have moved on since step 1. Read-only like the rest of the app: prints the confirmation."""
+    row = fetch_order_row(order_id=order_id, cust_id=authenticated_cust_id)   # order AND customer
+    if row is None:
+        return "I'm sorry, I couldn't find an order on your account to cancel."
+    status = (row.get("order_status") or "").strip().lower()
+    reason = _cancellation_block_reason(row["order_id"], status)
+    if reason:
+        return reason
+    return f"Your order {row['order_id']} has been cancelled."
 
 @tool
 def answer_tool(raw_response: str, user_context: str) -> str:
